@@ -107,6 +107,15 @@ inputs:
       Values below 256 are clamped to 256.
     required: false
     default: "4096"
+  pr_body_chars:
+    description: >
+      Maximum characters of the pull request description to include in the
+      review context. Default 2000. Raise for very detailed PR descriptions;
+      lower to reduce token usage on simple PRs. Descriptions longer than
+      this limit are truncated and the AI is notified so it does not flag
+      the description as incomplete. Values below 50 are clamped to 50.
+    required: false
+    default: "2000"
 
 outputs:
   review:
@@ -123,6 +132,7 @@ runs:
   using: composite
   steps:
     - name: Check draft PR policy
+      id: draft-check
       shell: bash
       env:
         IS_DRAFT:      ${{ github.event.pull_request.draft }}
@@ -142,11 +152,12 @@ runs:
           _is_draft="${IS_DRAFT:-false}"
           if [ "$_is_draft" = "true" ]; then
             echo "Skipping review — pull request is a draft"
-            exit 0
+            echo "draft_skip=true" >> "$GITHUB_OUTPUT"
           fi
         fi
 
     - name: Fetch reviewsentry.yml config
+      if: steps.draft-check.outputs.draft_skip != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -176,14 +187,16 @@ runs:
           fi
         fi
         rm -f "$GH_ERR"
+        _DELIM="RSEOF_$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
         {
-          echo "REVIEWSENTRY_CONFIG<<RSEOF"
+          echo "REVIEWSENTRY_CONFIG<<${_DELIM}"
           printf '%s' "${CONFIG:-}"
           echo ""
-          echo "RSEOF"
+          echo "${_DELIM}"
         } >> "$GITHUB_ENV"
 
     - name: Capture PR diff
+      if: steps.draft-check.outputs.draft_skip != 'true'
       id: diff
       shell: bash
       env:
@@ -207,11 +220,12 @@ runs:
         rm -f "$GH_DIFF_ERR"
 
     - name: Post no-changes comment
-      if: steps.diff.outputs.skip == 'true'
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
       run: |
+        set -euo pipefail
         {
           echo "## AI Code Review"
           echo ""
@@ -223,7 +237,7 @@ runs:
         gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/no_diff_comment.md"
 
     - name: Run AI review
-      if: steps.diff.outputs.skip != 'true'
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip != 'true'
       id: review
       shell: bash
       env:
@@ -241,10 +255,11 @@ runs:
         REVIEWSENTRY_CONFIG:   ${{ env.REVIEWSENTRY_CONFIG }}
         SHOW_PASSING_CRITERIA: ${{ inputs.show_passing_criteria }}
         MAX_TOKENS:            ${{ inputs.max_tokens }}
+        PR_BODY_CHARS:         ${{ inputs.pr_body_chars }}
       run: python3 "${{ github.action_path }}/scripts/review.py"
 
     - name: Post review comment
-      if: steps.diff.outputs.skip != 'true'
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip != 'true'
       shell: bash
       env:
         GH_TOKEN:      ${{ inputs.github_token }}
@@ -257,7 +272,7 @@ runs:
         done
 
     - name: Check verdict
-      if: steps.diff.outputs.skip != 'true'
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip != 'true'
       id: verdict
       shell: bash
       env:

@@ -18,10 +18,13 @@ Environment variables (set by action.yml):
     SHOW_PASSING_CRITERIA — include passing criteria in output (default: true)
     DIFF_LINES_LIMIT      — lines-per-chunk threshold (controls truncation or chunking)
     MAX_TOKENS            — maximum tokens for AI response (default: 4096)
+    CUSTOM_RULES          — project-specific sensitive data patterns, one per line (optional)
+    PR_BODY_CHARS         — maximum PR body characters to include in context (default: 2000)
 """
 
 import importlib
 import os
+import secrets
 import sys
 import urllib.error
 
@@ -41,6 +44,7 @@ PR_TITLE  = os.environ.get("PR_TITLE", "")
 PR_BODY   = os.environ.get("PR_BODY", "")
 PR_NUM         = os.environ.get("PR_NUMBER", "")
 EXTRA          = os.environ.get("REVIEW_CRITERIA", "")
+CUSTOM_RULES   = [r.strip() for r in os.environ.get("CUSTOM_RULES", "").splitlines() if r.strip()]
 SYSTEM_CONTEXT    = os.environ.get("SYSTEM_CONTEXT", "").strip()
 DIFF_LINES_LIMIT  = max(1, int(os.environ.get("DIFF_LINES_LIMIT", "1500")))
 MIN_TOKENS        = 256
@@ -104,18 +108,36 @@ _system_base = (
 )
 SYSTEM = _system_base + (f" {SYSTEM_CONTEXT}" if SYSTEM_CONTEXT else "")
 
-PR_BODY_EXCERPT_LEN = 500
-body_excerpt = PR_BODY[:PR_BODY_EXCERPT_LEN] if PR_BODY else "(no description)"
+CONFIG_PR_BODY_CHARS = max(50, int(os.environ.get("PR_BODY_CHARS", "2000")))
+_pr_body_full = PR_BODY or ""
+if _pr_body_full and len(_pr_body_full) > CONFIG_PR_BODY_CHARS:
+    _omitted = len(_pr_body_full) - CONFIG_PR_BODY_CHARS
+    body_excerpt = (
+        _pr_body_full[:CONFIG_PR_BODY_CHARS]
+        + f"\n\n*(PR description truncated at {CONFIG_PR_BODY_CHARS} characters"
+        + f" — {_omitted} characters omitted)*"
+    )
+else:
+    body_excerpt = _pr_body_full or "(no description)"
 
 # Load criteria config from .github/reviewsentry.yml (if present)
 cfg_overrides, cfg_custom, cfg_warnings, cfg_behaviour = rs_config.load()
 
+_sensitive_data_text = (
+    "**Sensitive data disclosure** — flag any credentials, API keys, personal information "
+    "(real names, usernames, email addresses), file system paths revealing machine username, "
+    "computer/host names, or private repo names/URLs. Severity: Critical (credentials), "
+    "High (personal identifiers, private paths), Moderate (computer names, repo names). "
+    "Report before all other findings."
+)
+if CUSTOM_RULES:
+    _rules_list = ", ".join(f'"{r}"' for r in CUSTOM_RULES)
+    _sensitive_data_text += (
+        f" Additionally, flag any occurrences of these project-specific terms as High severity: {_rules_list}."
+    )
+
 _default_criteria = [
-    ("sensitive_data",  "**Sensitive data disclosure** — flag any credentials, API keys, personal information "
-                        "(real names, usernames, email addresses), file system paths revealing machine username, "
-                        "computer/host names, or private repo names/URLs. Severity: Critical (credentials), "
-                        "High (personal identifiers, private paths), Moderate (computer names, repo names). "
-                        "Report before all other findings."),
+    ("sensitive_data",  _sensitive_data_text),
     ("merge_conflicts", "**Merge conflicts** — flag any conflict markers (<<<<<<, =======, >>>>>>>) as an immediate blocker."),
     ("correctness",     "**Correctness** — does the code do what it claims? Are edge cases handled?"),
     ("cross_platform",  "**Cross-platform** — will it work on macOS, Linux, and Windows (Git Bash)?"),
@@ -185,8 +207,9 @@ def _build_prompt(diff_block: str, batch_context: str = "") -> str:
         "- Begin each criterion section header with ✅ (no issues found) or ⚠️ (issues present).\n"
         "- Prefix each individual finding with \U0001f534 (Critical — block merge), "
         "\U0001f7e0 (High — fix before merge), "
-        "\U0001f7e1 (Moderate — minor problem worth fixing), "
-        "or \U0001f535 (Low/Informational — noted for completeness, no action required) "
+        "\U0001f7e1 (Moderate — a specific code change is recommended), "
+        "or \U0001f535 (Low/Informational — observation only, no fix needed; "
+        "choose \U0001f535 when your analysis concludes the code is already correct) "
         "based on severity.\n"
         + ("- Omit criterion sections where no issues were found — show only ⚠️ sections.\n"
            if not SHOW_PASSING else "")
@@ -307,7 +330,7 @@ for i, part in enumerate(parts, 1):
 
 # ── Write output ──────────────────────────────────────────────────────────────
 
-delimiter = "AI_REVIEW_EOF"
+delimiter = f"AI_REVIEW_EOF_{secrets.token_hex(8)}"
 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
     out.write(f"review<<{delimiter}\n{review}\n{delimiter}\n")
     out.write(f"review_parts={n}\n")
