@@ -41,7 +41,7 @@ PR_BODY   = os.environ.get("PR_BODY", "")
 PR_NUM         = os.environ.get("PR_NUMBER", "")
 EXTRA          = os.environ.get("REVIEW_CRITERIA", "")
 SYSTEM_CONTEXT    = os.environ.get("SYSTEM_CONTEXT", "").strip()
-DIFF_LINES_LIMIT  = int(os.environ.get("DIFF_LINES_LIMIT", "1500"))
+DIFF_LINES_LIMIT  = max(1, int(os.environ.get("DIFF_LINES_LIMIT", "1500")))
 
 _SHOW_PASSING_KEY = "SHOW_PASSING_CRITERIA"
 _show_raw = os.environ.get(_SHOW_PASSING_KEY, "true").strip().lower()
