@@ -24,6 +24,7 @@ Environment variables (set by action.yml):
 
 import importlib
 import os
+import secrets
 import sys
 import urllib.error
 
@@ -329,7 +330,7 @@ for i, part in enumerate(parts, 1):
 
 # ── Write output ──────────────────────────────────────────────────────────────
 
-delimiter = "AI_REVIEW_EOF"
+delimiter = f"AI_REVIEW_EOF_{secrets.token_hex(8)}"
 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
     out.write(f"review<<{delimiter}\n{review}\n{delimiter}\n")
     out.write(f"review_parts={n}\n")
