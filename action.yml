@@ -100,6 +100,13 @@ inputs:
       workflow warning and defaults to true.
     required: false
     default: "true"
+  max_tokens:
+    description: >
+      Maximum tokens for the AI response. Default 4096. Raise if reviews are
+      being cut off mid-criterion; lower to reduce cost on very small PRs.
+      Values below 256 are clamped to 256.
+    required: false
+    default: "4096"
 
 outputs:
   review:
@@ -233,25 +240,21 @@ runs:
         SYSTEM_CONTEXT:        ${{ inputs.system_context }}
         REVIEWSENTRY_CONFIG:   ${{ env.REVIEWSENTRY_CONFIG }}
         SHOW_PASSING_CRITERIA: ${{ inputs.show_passing_criteria }}
+        MAX_TOKENS:            ${{ inputs.max_tokens }}
       run: python3 "${{ github.action_path }}/scripts/review.py"
 
     - name: Post review comment
       if: steps.diff.outputs.skip != 'true'
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github_token }}
-        REVIEW:   ${{ steps.review.outputs.review }}
+        GH_TOKEN:      ${{ inputs.github_token }}
+        REVIEW_PARTS:  ${{ steps.review.outputs.review_parts }}
       run: |
-        {
-          echo "## AI Code Review"
-          echo ""
-          printf '%s' "$REVIEW"
-          echo ""
-          echo ""
-          echo "---"
-          echo "*AI-generated advisory review. All verdicts are recommendations only — the final merge decision rests with the human maintainer.*"
-        } > "$RUNNER_TEMP/review_body.md"
-        gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/review_body.md"
+        set -euo pipefail
+        for i in $(seq 1 "${REVIEW_PARTS:-1}"); do
+          gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" \
+            --body-file "$RUNNER_TEMP/review_part_${i}.md"
+        done
 
     - name: Check verdict
       if: steps.diff.outputs.skip != 'true'

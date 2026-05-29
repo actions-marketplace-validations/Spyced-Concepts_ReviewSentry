@@ -158,6 +158,7 @@ The `@v0` floating tag was removed on 2026-05-14. See the [CHANGELOG](CHANGELOG.
 | `show_passing_criteria` | | `true` | Default: `true`. Whether to include passing criteria (no issues found) in the review output. Set to `false` to show only criteria with findings, keeping reviews concise on large PRs. Accepted values: `true`/`1`/`yes` or `false`/`0`/`no`. Any other value triggers a workflow warning and defaults to `true`. |
 | `fail_on` | | `never` | Default: `never`. When to fail the workflow based on the AI verdict. Set to `request_changes` to exit non-zero when the verdict is REQUEST CHANGES, blocking PR merges via required status checks. Accepted values: `never`, `request_changes`. Any other value triggers a workflow warning and defaults to `never`. |
 | `review_drafts` | | `true` | Default: `true`. Whether to review draft pull requests — drafts are reviewed by default. Set to `false` to skip review until the PR is marked ready for review. Accepted values: `true`/`1`/`yes` or `false`/`0`/`no`. Any other value triggers a workflow warning and defaults to `true`. |
+| `max_tokens` | | `4096` | Maximum tokens for the AI response. Raise if reviews are being cut off mid-criterion; lower to reduce cost on very small PRs. Values below 256 are clamped to 256. Reviews exceeding 50,000 characters are automatically split across multiple sequential PR comments, with the verdict always in the last comment. |
 | `github_token` | ✓ | — | GitHub token for posting the review comment |
 
 ## Outputs
