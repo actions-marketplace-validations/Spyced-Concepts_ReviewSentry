@@ -176,11 +176,12 @@ runs:
           fi
         fi
         rm -f "$GH_ERR"
+        _DELIM="RSEOF_$(openssl rand -hex 8)"
         {
-          echo "REVIEWSENTRY_CONFIG<<RSEOF"
+          echo "REVIEWSENTRY_CONFIG<<${_DELIM}"
           printf '%s' "${CONFIG:-}"
           echo ""
-          echo "RSEOF"
+          echo "${_DELIM}"
         } >> "$GITHUB_ENV"
 
     - name: Capture PR diff
