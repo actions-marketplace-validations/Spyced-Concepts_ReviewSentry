@@ -107,6 +107,15 @@ inputs:
       Values below 256 are clamped to 256.
     required: false
     default: "4096"
+  pr_body_chars:
+    description: >
+      Maximum characters of the pull request description to include in the
+      review context. Default 2000. Raise for very detailed PR descriptions;
+      lower to reduce token usage on simple PRs. Descriptions longer than
+      this limit are truncated and the AI is notified so it does not flag
+      the description as incomplete. Values below 50 are clamped to 50.
+    required: false
+    default: "2000"
 
 outputs:
   review:
@@ -241,6 +250,7 @@ runs:
         REVIEWSENTRY_CONFIG:   ${{ env.REVIEWSENTRY_CONFIG }}
         SHOW_PASSING_CRITERIA: ${{ inputs.show_passing_criteria }}
         MAX_TOKENS:            ${{ inputs.max_tokens }}
+        PR_BODY_CHARS:         ${{ inputs.pr_body_chars }}
       run: python3 "${{ github.action_path }}/scripts/review.py"
 
     - name: Post review comment

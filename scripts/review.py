@@ -18,6 +18,7 @@ Environment variables (set by action.yml):
     SHOW_PASSING_CRITERIA — include passing criteria in output (default: true)
     DIFF_LINES_LIMIT      — lines-per-chunk threshold (controls truncation or chunking)
     MAX_TOKENS            — maximum tokens for AI response (default: 4096)
+    PR_BODY_CHARS         — maximum PR body characters to include in context (default: 2000)
 """
 
 import importlib
@@ -104,8 +105,17 @@ _system_base = (
 )
 SYSTEM = _system_base + (f" {SYSTEM_CONTEXT}" if SYSTEM_CONTEXT else "")
 
-PR_BODY_EXCERPT_LEN = 500
-body_excerpt = PR_BODY[:PR_BODY_EXCERPT_LEN] if PR_BODY else "(no description)"
+CONFIG_PR_BODY_CHARS = max(50, int(os.environ.get("PR_BODY_CHARS", "2000")))
+_pr_body_full = PR_BODY or ""
+if _pr_body_full and len(_pr_body_full) > CONFIG_PR_BODY_CHARS:
+    _omitted = len(_pr_body_full) - CONFIG_PR_BODY_CHARS
+    body_excerpt = (
+        _pr_body_full[:CONFIG_PR_BODY_CHARS]
+        + f"\n\n*(PR description truncated at {CONFIG_PR_BODY_CHARS} characters"
+        + f" — {_omitted} characters omitted)*"
+    )
+else:
+    body_excerpt = _pr_body_full or "(no description)"
 
 # Load criteria config from .github/reviewsentry.yml (if present)
 cfg_overrides, cfg_custom, cfg_warnings, cfg_behaviour = rs_config.load()
@@ -185,8 +195,9 @@ def _build_prompt(diff_block: str, batch_context: str = "") -> str:
         "- Begin each criterion section header with ✅ (no issues found) or ⚠️ (issues present).\n"
         "- Prefix each individual finding with \U0001f534 (Critical — block merge), "
         "\U0001f7e0 (High — fix before merge), "
-        "\U0001f7e1 (Moderate — minor problem worth fixing), "
-        "or \U0001f535 (Low/Informational — noted for completeness, no action required) "
+        "\U0001f7e1 (Moderate — a specific code change is recommended), "
+        "or \U0001f535 (Low/Informational — observation only, no fix needed; "
+        "choose \U0001f535 when your analysis concludes the code is already correct) "
         "based on severity.\n"
         + ("- Omit criterion sections where no issues were found — show only ⚠️ sections.\n"
            if not SHOW_PASSING else "")
