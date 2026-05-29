@@ -152,7 +152,7 @@ The `@v0` floating tag was removed on 2026-05-14. See the [CHANGELOG](CHANGELOG.
 | `pr_number` | ✓ | — | Pull request number |
 | `pr_title` | ✓ | — | Pull request title |
 | `pr_body` | | `""` | Pull request description |
-| `diff_lines` | | `1500` | Max diff lines to send for review. If the diff exceeds this limit it is truncated and the review comment includes a visible warning: `> Diff was large — review based on first N lines only.` The action never fails due to diff size — it always posts a review, with the truncation note prepended when applicable. Reduce this value if you hit AI provider token limits; increase it for large refactors. |
+| `diff_lines` | | `1500` | Lines-per-chunk threshold for diff processing. Behaviour depends on `chunk_large_diffs` in `.github/reviewsentry.yml`: if chunking is enabled, this is the max lines per review pass; if chunking is disabled (default), diffs exceeding this limit are truncated and the review lists any files that were not reviewed. Raise this value for large refactors; lower it if you hit provider token limits. |
 | `review_criteria` | | `""` | Additional review criteria, one per line |
 | `custom_rules` | | `""` | Custom sensitive data scan patterns, one per line |
 | `show_passing_criteria` | | `true` | Default: `true`. Whether to include passing criteria (no issues found) in the review output. Set to `false` to show only criteria with findings, keeping reviews concise on large PRs. Accepted values: `true`/`1`/`yes` or `false`/`0`/`no`. Any other value triggers a workflow warning and defaults to `true`. |
@@ -220,15 +220,58 @@ Add custom criteria via `review_criteria`. Add domain-specific sensitive data pa
 
 ---
 
+## Per-repo configuration (`.github/reviewsentry.yml`)
+
+Drop a `.github/reviewsentry.yml` file in your repository to customise ReviewSentry's behaviour without touching the workflow file.
+
+### Diff handling for large PRs
+
+By default, ReviewSentry truncates the diff at `diff_lines` lines and lists any files that were not reviewed. To review the entire diff across multiple passes instead, set:
+
+```yaml
+# .github/reviewsentry.yml
+chunk_large_diffs: true
+```
+
+| `chunk_large_diffs` value | Behaviour |
+|---|---|
+| Missing or `false` | Truncate at `diff_lines`; list skipped files in the review comment |
+| `true` | Capture the full diff; split by file boundary if over threshold; run one review pass per batch; aggregate findings with a combined worst-case verdict |
+
+### Disabling criteria
+
+```yaml
+# Disable optional criteria
+cross_platform: false
+bash_quality: false
+
+# Disable a core criterion — requires explicit acknowledgement
+sensitive_data: false
+acknowledge_disabled_core: true
+```
+
+### Custom criteria
+
+```yaml
+custom:
+  - "Verify all async functions include error handling"
+  - "Flag any use of console.log in production code"
+```
+
+---
+
 ## Architecture
 
 ```
 scripts/
   review.py            # Provider-agnostic core — zero vendor references
+  diff_utils.py        # Diff splitting, batching, and review aggregation
+  config.py            # .github/reviewsentry.yml loader and validator
   adapters/
     anthropic.py       # Anthropic Claude
     openai.py          # OpenAI + any OpenAI-compatible endpoint
     gemini.py          # Google Gemini
+    github_models.py   # GitHub Models (zero-cost with GITHUB_TOKEN)
 docs/
   setup-anthropic.md
   setup-openai.md

@@ -43,7 +43,12 @@ inputs:
     required: false
     default: ""
   diff_lines:
-    description: Maximum number of diff lines to review. Default 1500.
+    description: >
+      Lines-per-chunk threshold for diff processing. When chunk_large_diffs
+      is true in .github/reviewsentry.yml, this is the maximum lines per
+      review pass. When chunk_large_diffs is false or absent (default),
+      diffs exceeding this limit are truncated and the review lists any
+      files that were not reviewed. Default 1500.
     required: false
     default: "1500"
   review_criteria:
@@ -178,16 +183,40 @@ runs:
         GH_TOKEN: ${{ inputs.github_token }}
       run: |
         set -euo pipefail
+        GH_DIFF_ERR=$(mktemp)
         gh pr diff "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" \
-          | head -n "${{ inputs.diff_lines }}" > "$RUNNER_TEMP/pr_diff.txt" || true
+          > "$RUNNER_TEMP/pr_diff.txt" 2>"$GH_DIFF_ERR" || true
         LINES=$(wc -l < "$RUNNER_TEMP/pr_diff.txt")
         if [ "${LINES:-0}" -eq 0 ]; then
-          echo "::error::Diff is empty — gh pr diff may have failed or PR has no changes"
-          exit 1
+          if [ -s "$GH_DIFF_ERR" ]; then
+            echo "::warning::gh pr diff produced no output: $(cat "$GH_DIFF_ERR")"
+          fi
+          echo "No reviewable diff — sync or promotion PR with no new changes."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "lines=$LINES" >> "$GITHUB_OUTPUT"
         fi
-        echo "lines=$LINES" >> "$GITHUB_OUTPUT"
+        rm -f "$GH_DIFF_ERR"
+
+    - name: Post no-changes comment
+      if: steps.diff.outputs.skip == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        {
+          echo "## AI Code Review"
+          echo ""
+          echo "No reviewable diff — this appears to be a sync or promotion PR with no new changes. Skipping review."
+          echo ""
+          echo "---"
+          echo "*AI-generated advisory review. All verdicts are recommendations only — the final merge decision rests with the human maintainer.*"
+        } > "$RUNNER_TEMP/no_diff_comment.md"
+        gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/no_diff_comment.md"
 
     - name: Run AI review
+      if: steps.diff.outputs.skip != 'true'
       id: review
       shell: bash
       env:
@@ -207,21 +236,15 @@ runs:
       run: python3 "${{ github.action_path }}/scripts/review.py"
 
     - name: Post review comment
+      if: steps.diff.outputs.skip != 'true'
       shell: bash
       env:
-        GH_TOKEN:   ${{ inputs.github_token }}
-        REVIEW:     ${{ steps.review.outputs.review }}
-        DIFF_LINES: ${{ steps.diff.outputs.lines }}
-        DIFF_LIMIT: ${{ inputs.diff_lines }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        REVIEW:   ${{ steps.review.outputs.review }}
       run: |
-        NOTE=""
-        if [ "${DIFF_LINES:-0}" -ge "${DIFF_LIMIT:-1500}" ]; then
-          NOTE="> Diff was large — review based on first ${DIFF_LIMIT} lines only."
-        fi
         {
           echo "## AI Code Review"
           echo ""
-          [ -n "$NOTE" ] && printf '%s\n\n' "$NOTE"
           printf '%s' "$REVIEW"
           echo ""
           echo ""
@@ -231,6 +254,7 @@ runs:
         gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/review_body.md"
 
     - name: Check verdict
+      if: steps.diff.outputs.skip != 'true'
       id: verdict
       shell: bash
       env:
