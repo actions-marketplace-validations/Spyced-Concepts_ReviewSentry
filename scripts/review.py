@@ -18,6 +18,7 @@ Environment variables (set by action.yml):
     SHOW_PASSING_CRITERIA — include passing criteria in output (default: true)
     DIFF_LINES_LIMIT      — lines-per-chunk threshold (controls truncation or chunking)
     MAX_TOKENS            — maximum tokens for AI response (default: 4096)
+    CUSTOM_RULES          — project-specific sensitive data patterns, one per line (optional)
 """
 
 import importlib
@@ -41,6 +42,7 @@ PR_TITLE  = os.environ.get("PR_TITLE", "")
 PR_BODY   = os.environ.get("PR_BODY", "")
 PR_NUM         = os.environ.get("PR_NUMBER", "")
 EXTRA          = os.environ.get("REVIEW_CRITERIA", "")
+CUSTOM_RULES   = [r.strip() for r in os.environ.get("CUSTOM_RULES", "").splitlines() if r.strip()]
 SYSTEM_CONTEXT    = os.environ.get("SYSTEM_CONTEXT", "").strip()
 DIFF_LINES_LIMIT  = max(1, int(os.environ.get("DIFF_LINES_LIMIT", "1500")))
 MIN_TOKENS        = 256
@@ -110,12 +112,21 @@ body_excerpt = PR_BODY[:PR_BODY_EXCERPT_LEN] if PR_BODY else "(no description)"
 # Load criteria config from .github/reviewsentry.yml (if present)
 cfg_overrides, cfg_custom, cfg_warnings, cfg_behaviour = rs_config.load()
 
+_sensitive_data_text = (
+    "**Sensitive data disclosure** — flag any credentials, API keys, personal information "
+    "(real names, usernames, email addresses), file system paths revealing machine username, "
+    "computer/host names, or private repo names/URLs. Severity: Critical (credentials), "
+    "High (personal identifiers, private paths), Moderate (computer names, repo names). "
+    "Report before all other findings."
+)
+if CUSTOM_RULES:
+    _rules_list = ", ".join(f'"{r}"' for r in CUSTOM_RULES)
+    _sensitive_data_text += (
+        f" Additionally, flag any occurrences of these project-specific terms as High severity: {_rules_list}."
+    )
+
 _default_criteria = [
-    ("sensitive_data",  "**Sensitive data disclosure** — flag any credentials, API keys, personal information "
-                        "(real names, usernames, email addresses), file system paths revealing machine username, "
-                        "computer/host names, or private repo names/URLs. Severity: Critical (credentials), "
-                        "High (personal identifiers, private paths), Moderate (computer names, repo names). "
-                        "Report before all other findings."),
+    ("sensitive_data",  _sensitive_data_text),
     ("merge_conflicts", "**Merge conflicts** — flag any conflict markers (<<<<<<, =======, >>>>>>>) as an immediate blocker."),
     ("correctness",     "**Correctness** — does the code do what it claims? Are edge cases handled?"),
     ("cross_platform",  "**Cross-platform** — will it work on macOS, Linux, and Windows (Git Bash)?"),
