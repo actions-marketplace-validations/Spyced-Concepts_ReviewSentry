@@ -24,13 +24,14 @@ def call_api(
     system: str,
     user: str,
     base_url: str | None = None,
+    max_tokens: int = 4096,
 ) -> str:
     """Call the GitHub Models inference API and return the review text."""
     url = (base_url or _DEFAULT_BASE_URL) + "/chat/completions"
 
     payload = {
         "model": model,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},

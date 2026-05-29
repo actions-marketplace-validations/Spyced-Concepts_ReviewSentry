@@ -17,13 +17,14 @@ def call_api(
     system: str,
     user: str,
     base_url: str | None = None,
+    max_tokens: int = 4096,
 ) -> str:
     """Call the Anthropic Messages API and return the review text."""
     url = (base_url or "https://api.anthropic.com") + "/v1/messages"
 
     payload = {
         "model": model,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
         "system": [
             {
                 "type": "text",
