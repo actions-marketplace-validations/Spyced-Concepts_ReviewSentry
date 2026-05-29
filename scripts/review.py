@@ -17,6 +17,7 @@ Environment variables (set by action.yml):
     SYSTEM_CONTEXT        — project-specific context appended to system prompt (optional)
     SHOW_PASSING_CRITERIA — include passing criteria in output (default: true)
     DIFF_LINES_LIMIT      — lines-per-chunk threshold (controls truncation or chunking)
+    MAX_TOKENS            — maximum tokens for AI response (default: 4096)
 """
 
 import importlib
@@ -42,6 +43,8 @@ PR_NUM         = os.environ.get("PR_NUMBER", "")
 EXTRA          = os.environ.get("REVIEW_CRITERIA", "")
 SYSTEM_CONTEXT    = os.environ.get("SYSTEM_CONTEXT", "").strip()
 DIFF_LINES_LIMIT  = max(1, int(os.environ.get("DIFF_LINES_LIMIT", "1500")))
+MIN_TOKENS        = 256
+MAX_TOKENS        = max(MIN_TOKENS, int(os.environ.get("MAX_TOKENS", "4096")))
 
 _SHOW_PASSING_KEY = "SHOW_PASSING_CRITERIA"
 _show_raw = os.environ.get(_SHOW_PASSING_KEY, "true").strip().lower()
@@ -101,7 +104,8 @@ _system_base = (
 )
 SYSTEM = _system_base + (f" {SYSTEM_CONTEXT}" if SYSTEM_CONTEXT else "")
 
-body_excerpt = PR_BODY[:500] if PR_BODY else "(no description)"
+PR_BODY_EXCERPT_LEN = 500
+body_excerpt = PR_BODY[:PR_BODY_EXCERPT_LEN] if PR_BODY else "(no description)"
 
 # Load criteria config from .github/reviewsentry.yml (if present)
 cfg_overrides, cfg_custom, cfg_warnings, cfg_behaviour = rs_config.load()
@@ -211,6 +215,7 @@ def _call(prompt: str) -> str:
             system=SYSTEM,
             user=prompt,
             base_url=BASE_URL or None,
+            max_tokens=MAX_TOKENS,
         )
     except urllib.error.HTTPError as e:
         print(f"::error::API HTTP error {e.code}: {e.read().decode()}")
@@ -276,10 +281,30 @@ else:
             + skipped_list
         )
 
+# ── Split review for posting ──────────────────────────────────────────────────
+
+_FOOTER = (
+    "\n\n---\n"
+    "*AI-generated advisory review. All verdicts are recommendations only "
+    "— the final merge decision rests with the human maintainer.*"
+)
+
+parts = diff_utils.split_review_for_posting(review)
+n = len(parts)
+
+for i, part in enumerate(parts, 1):
+    label = f" ({i}/{n})" if n > 1 else ""
+    header = f"## AI Code Review{label}\n\n"
+    footer = _FOOTER if i == n else ""
+    path = os.path.join(runner_temp, f"review_part_{i}.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(header + part.strip() + footer)
+
 # ── Write output ──────────────────────────────────────────────────────────────
 
 delimiter = "AI_REVIEW_EOF"
 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
     out.write(f"review<<{delimiter}\n{review}\n{delimiter}\n")
+    out.write(f"review_parts={n}\n")
 
-print("Review complete.")
+print(f"Review complete ({n} part(s)).")

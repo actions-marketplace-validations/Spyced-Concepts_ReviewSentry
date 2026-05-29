@@ -105,3 +105,51 @@ def aggregate_reviews(reviews: list[str]) -> str:
     ]
 
     return '\n\n---\n\n'.join(parts) + f'\n\n---\n\n{verdict_line}'
+
+
+# ── Review splitting ───────────────────────────────────────────────────────────
+
+# Criterion sections start with ✅/⚠️ (per-criterion headers) or ### (multi-pass
+# pass headers from chunked reviews).
+_SECTION_RE = re.compile(r'^(✅|⚠️|###\s)', re.MULTILINE)
+
+COMMENT_CHAR_LIMIT = 50_000  # GitHub's hard limit is 65,536; 50K gives a safe margin
+
+
+def split_review_for_posting(review: str, char_limit: int = COMMENT_CHAR_LIMIT) -> list[str]:
+    """
+    Split a review into parts each ≤ char_limit characters, breaking at
+    criterion-section boundaries (lines starting with ✅, ⚠️, or ###).
+
+    If a single section exceeds char_limit it is placed in its own part rather
+    than truncated — no content is dropped. The verdict line is always in the
+    last part because splits occur at section *starts*, keeping each section
+    with the content that follows it (including any trailing verdict).
+
+    Returns a list of 1 or more non-empty strings.
+    """
+    if len(review) <= char_limit:
+        return [review]
+
+    boundaries = [m.start() for m in _SECTION_RE.finditer(review)]
+    if not boundaries:
+        # No section markers — hard split at char_limit
+        return [review[i: i + char_limit] for i in range(0, len(review), char_limit)]
+
+    parts: list[str] = []
+    start = 0
+
+    while start < len(review):
+        end = start + char_limit
+        if end >= len(review):
+            parts.append(review[start:])
+            break
+        # Last section boundary strictly between start and end
+        split_at = next((b for b in reversed(boundaries) if start < b < end), None)
+        if split_at is None:
+            # Current section alone exceeds limit — include it whole
+            split_at = next((b for b in boundaries if b > end), len(review))
+        parts.append(review[start:split_at].rstrip())
+        start = split_at
+
+    return parts or [review]
