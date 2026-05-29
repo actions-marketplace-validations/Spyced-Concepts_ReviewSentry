@@ -36,8 +36,12 @@ OPTIONAL_CRITERIA = {
 
 ALL_CRITERIA = CORE_CRITERIA | OPTIONAL_CRITERIA
 
+# Behaviour flags — control how the action processes the diff.
+# Not criteria; not subject to core/optional criterion rules.
+BEHAVIOUR_FLAGS = {"chunk_large_diffs"}
+
 # All keys permitted in reviewsentry.yml. Anything else is rejected.
-ALLOWED_KEYS = ALL_CRITERIA | {"acknowledge_disabled_core", "custom"}
+ALLOWED_KEYS = ALL_CRITERIA | BEHAVIOUR_FLAGS | {"acknowledge_disabled_core", "custom"}
 
 # Hard cap on config file size — prevents oversized payloads.
 MAX_LINES = 100
@@ -102,14 +106,15 @@ def load():
     a malformed config is a signal the user needs to fix, not something to silently
     ignore. If no config file is present (empty env var), returns defaults silently.
 
-    Returns (overrides, custom_criteria, warnings):
+    Returns (overrides, custom_criteria, warnings, behaviour):
         overrides       — dict of criterion_name -> bool (True=enabled, False=disabled)
         custom_criteria — list of additional criterion strings
         warnings        — list of warning messages to surface in the review
+        behaviour       — dict of behaviour flag name -> value (e.g. chunk_large_diffs)
     """
     content = os.environ.get("REVIEWSENTRY_CONFIG", "").strip()
     if not content:
-        return {}, [], []
+        return {}, [], [], {}
 
     if len(content.encode("utf-8")) > MAX_BYTES:
         print(
@@ -174,4 +179,10 @@ def load():
                 )
         custom_criteria = [c for c in raw if len(c) <= MAX_CRITERION_LENGTH]
 
-    return overrides, custom_criteria, warnings
+    # Collect behaviour flags (boolean values only)
+    behaviour: dict[str, bool] = {}
+    for key in BEHAVIOUR_FLAGS:
+        if key in data and isinstance(data[key], bool):
+            behaviour[key] = data[key]
+
+    return overrides, custom_criteria, warnings, behaviour

@@ -109,7 +109,7 @@ def custom_rule_sensitive_section(review_context):
     # The sensitive_data criterion is criterion 1 in the default list.
     # Custom rules are appended to the criteria list alongside the sensitive data criterion.
     # Verify that the sensitive_data criterion is active (not disabled).
-    overrides, _, _ = rs_config.load()
+    overrides, _, _, _ = rs_config.load()
     assert overrides.get("sensitive_data", True) is True, \
         "sensitive_data criterion must be active for custom rules to appear in that section"
 
