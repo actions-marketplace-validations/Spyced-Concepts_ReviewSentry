@@ -85,7 +85,7 @@ def extra_criterion(monkeypatch):
 
 @then("the review applies all default criteria including sensitive data and correctness")
 def default_criteria_applied():
-    overrides, custom, warnings = rs_config.load()
+    overrides, custom, warnings, _ = rs_config.load()
     assert overrides.get("sensitive_data", True) is True, \
         "sensitive_data criterion disabled by default — should be enabled"
     assert overrides.get("correctness", True) is True, \
@@ -101,14 +101,14 @@ def custom_criterion_in_criteria():
 
 @then("the review comment does not include a cross-platform finding")
 def no_cross_platform():
-    overrides, _, _ = rs_config.load()
+    overrides, _, _, _ = rs_config.load()
     assert overrides.get("cross_platform") is False, \
         "cross_platform criterion should be disabled but is not"
 
 
 @then("the review still applies all other default criteria")
 def other_criteria_still_active():
-    overrides, _, _ = rs_config.load()
+    overrides, _, _, _ = rs_config.load()
     assert overrides.get("sensitive_data", True) is True
     assert overrides.get("correctness", True) is True
     assert overrides.get("security", True) is True
@@ -116,21 +116,21 @@ def other_criteria_still_active():
 
 @then("the review comment does not include bash quality findings")
 def no_bash_quality():
-    overrides, _, _ = rs_config.load()
+    overrides, _, _, _ = rs_config.load()
     assert overrides.get("bash_quality") is False, \
         "bash_quality criterion should be disabled but is not"
 
 
 @then("the review comment includes a finding or note referencing the custom criterion")
 def custom_criterion_from_config():
-    _, custom, _ = rs_config.load()
+    _, custom, _, _ = rs_config.load()
     assert any("async" in c.lower() for c in custom), \
         "Custom criterion from config not found in loaded criteria"
 
 
 @then("the workflow fails or warns that disabling a core criterion requires explicit acknowledgement")
 def core_disable_no_ack_warns():
-    _, _, warnings = rs_config.load()
+    _, _, warnings, _ = rs_config.load()
     assert any("sensitive_data" in w.lower() or "acknowledge" in w.lower()
                for w in warnings), \
         "No warning raised when disabling core criterion without acknowledgement"
@@ -138,19 +138,19 @@ def core_disable_no_ack_warns():
 
 @then("the sensitive data criterion is still applied")
 def sensitive_data_still_applied():
-    overrides, _, _ = rs_config.load()
+    overrides, _, _, _ = rs_config.load()
     assert overrides.get("sensitive_data", True) is True, \
         "sensitive_data should remain active when disabled without acknowledgement"
 
 
 @then("the review comment notes the sensitive data criterion was explicitly disabled")
 def sensitive_data_disabled_with_notice():
-    overrides, _, warnings = rs_config.load()
+    overrides, _, warnings, _ = rs_config.load()
     assert overrides.get("sensitive_data") is False, \
         "sensitive_data should be disabled when acknowledge_disabled_core is true"
 
 
 @then("no sensitive data scan is performed")
 def no_sensitive_data_scan():
-    overrides, _, _ = rs_config.load()
+    overrides, _, _, _ = rs_config.load()
     assert overrides.get("sensitive_data") is False

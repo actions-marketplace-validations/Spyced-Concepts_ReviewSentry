@@ -16,7 +16,8 @@ Environment variables (set by action.yml):
     REVIEWSENTRY_CONFIG   — contents of .github/reviewsentry.yml (optional)
     SYSTEM_CONTEXT        — project-specific context appended to system prompt (optional)
     SHOW_PASSING_CRITERIA — include passing criteria in output (default: true)
-    DIFF_LINES_LIMIT      — max lines captured (for truncation note)
+    DIFF_LINES_LIMIT      — lines-per-chunk threshold (controls truncation or chunking)
+    MAX_TOKENS            — maximum tokens for AI response (default: 4096)
 """
 
 import importlib
@@ -25,6 +26,7 @@ import sys
 import urllib.error
 
 import config as rs_config
+import diff_utils
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -39,7 +41,11 @@ PR_TITLE  = os.environ.get("PR_TITLE", "")
 PR_BODY   = os.environ.get("PR_BODY", "")
 PR_NUM         = os.environ.get("PR_NUMBER", "")
 EXTRA          = os.environ.get("REVIEW_CRITERIA", "")
-SYSTEM_CONTEXT = os.environ.get("SYSTEM_CONTEXT", "").strip()
+SYSTEM_CONTEXT    = os.environ.get("SYSTEM_CONTEXT", "").strip()
+DIFF_LINES_LIMIT  = max(1, int(os.environ.get("DIFF_LINES_LIMIT", "1500")))
+MIN_TOKENS        = 256
+MAX_TOKENS        = max(MIN_TOKENS, int(os.environ.get("MAX_TOKENS", "4096")))
+
 _SHOW_PASSING_KEY = "SHOW_PASSING_CRITERIA"
 _show_raw = os.environ.get(_SHOW_PASSING_KEY, "true").strip().lower()
 if _show_raw in ("true", "1", "yes"):
@@ -98,11 +104,11 @@ _system_base = (
 )
 SYSTEM = _system_base + (f" {SYSTEM_CONTEXT}" if SYSTEM_CONTEXT else "")
 
-body_excerpt = PR_BODY[:500] if PR_BODY else "(no description)"
-diff_block   = diff.strip() if diff.strip() else "(empty diff)"
+PR_BODY_EXCERPT_LEN = 500
+body_excerpt = PR_BODY[:PR_BODY_EXCERPT_LEN] if PR_BODY else "(no description)"
 
 # Load criteria config from .github/reviewsentry.yml (if present)
-cfg_overrides, cfg_custom, cfg_warnings = rs_config.load()
+cfg_overrides, cfg_custom, cfg_warnings, cfg_behaviour = rs_config.load()
 
 _default_criteria = [
     ("sensitive_data",  "**Sensitive data disclosure** — flag any credentials, API keys, personal information "
@@ -149,36 +155,52 @@ config_notice = ""
 if cfg_warnings:
     config_notice = "\n> **reviewsentry.yml notice:** " + " | ".join(cfg_warnings) + "\n\n"
 
-USER = (
-    f"PR #{PR_NUM}\n\n"
-    "<pr_title>\n"
-    f"{PR_TITLE}\n"
-    "</pr_title>\n\n"
-    "<pr_description>\n"
-    f"{body_excerpt}\n"
-    "</pr_description>\n\n"
-    "Diff:\n```diff\n"
-    f"{diff_block}\n```\n\n"
-    f"{config_notice}"
-    "Review against these criteria:\n"
-    + "\n".join(criteria)
-    + "\n\n"
-    "Format your response as follows:\n"
-    "- Begin each criterion section header with ✅ (no issues found) or ⚠️ (issues present).\n"
-    "- Prefix each individual finding with \U0001f534 (Critical), \U0001f7e0 (High), "
-    "or \U0001f7e1 (Moderate/Low) based on severity.\n"
-    + ("- Omit criterion sections where no issues were found — show only ⚠️ sections.\n"
-       if not SHOW_PASSING else "")
-    + "\nAfter completing your full review of all criteria, end your response with exactly one of the following verdict lines. "
-    "The verdict must be the absolute last line — do not add any text, summary, or commentary after it. "
-    "Placing the verdict last encourages the reader to engage with the full review before seeing the outcome.\n\n"
-    "✅ **AI Recommendation: APPROVE**\n"
-    "📝 **AI Recommendation: APPROVE WITH NOTES**\n"
-    "❌ **AI Recommendation: REQUEST CHANGES**\n\n"
-    "Include the emoji and bold text exactly as shown. This is an advisory recommendation only — the final merge decision rests with the human maintainer."
-)
+# ── Diff processing ───────────────────────────────────────────────────────────
 
-# ── Dispatch to adapter ───────────────────────────────────────────────────────
+# chunk_large_diffs: True → multi-pass chunked review covering all files
+#                    False or missing → truncate at DIFF_LINES_LIMIT, list skipped files
+chunk_large_diffs = cfg_behaviour.get("chunk_large_diffs")
+
+_CHARS_PER_DIFF_LINE = 80  # average characters per line in a unified diff
+_CHAR_LIMIT = DIFF_LINES_LIMIT * _CHARS_PER_DIFF_LINE
+
+
+def _build_prompt(diff_block: str, batch_context: str = "") -> str:
+    return (
+        batch_context
+        + f"PR #{PR_NUM}\n\n"
+        "<pr_title>\n"
+        f"{PR_TITLE}\n"
+        "</pr_title>\n\n"
+        "<pr_description>\n"
+        f"{body_excerpt}\n"
+        "</pr_description>\n\n"
+        "Diff:\n```diff\n"
+        f"{diff_block}\n```\n\n"
+        f"{config_notice}"
+        "Review against these criteria:\n"
+        + "\n".join(criteria)
+        + "\n\n"
+        "Format your response as follows:\n"
+        "- Begin each criterion section header with ✅ (no issues found) or ⚠️ (issues present).\n"
+        "- Prefix each individual finding with \U0001f534 (Critical — block merge), "
+        "\U0001f7e0 (High — fix before merge), "
+        "\U0001f7e1 (Moderate — minor problem worth fixing), "
+        "or \U0001f535 (Low/Informational — noted for completeness, no action required) "
+        "based on severity.\n"
+        + ("- Omit criterion sections where no issues were found — show only ⚠️ sections.\n"
+           if not SHOW_PASSING else "")
+        + "\nAfter completing your full review of all criteria, end your response with exactly one of the following verdict lines. "
+        "The verdict must be the absolute last line — do not add any text, summary, or commentary after it. "
+        "Placing the verdict last encourages the reader to engage with the full review before seeing the outcome.\n\n"
+        "✅ **AI Recommendation: APPROVE**\n"
+        "📝 **AI Recommendation: APPROVE WITH NOTES**\n"
+        "❌ **AI Recommendation: REQUEST CHANGES**\n\n"
+        "Include the emoji and bold text exactly as shown. This is an advisory recommendation only — the final merge decision rests with the human maintainer."
+    )
+
+
+# ── Load adapter ──────────────────────────────────────────────────────────────
 
 module_name = PROVIDER.replace("-", "_")
 try:
@@ -187,32 +209,107 @@ except ModuleNotFoundError:
     print(f"::error::Adapter module 'adapters/{module_name}.py' not found")
     sys.exit(1)
 
-try:
-    review = adapter.call_api(
-        api_key=API_KEY,
-        model=MODEL,
-        system=SYSTEM,
-        user=USER,
-        base_url=BASE_URL or None,
-    )
-except urllib.error.HTTPError as e:
-    print(f"::error::API HTTP error {e.code}: {e.read().decode()}")
-    sys.exit(1)
-except urllib.error.URLError as e:
-    print(f"::error::Network error reaching AI API: {e.reason}")
-    sys.exit(1)
-except Exception as e:
-    print(f"::error::{e}")
-    sys.exit(1)
 
-if not isinstance(review, str) or not review.strip():
-    print("::error::Adapter returned empty or non-string review")
-    sys.exit(1)
+def _call(prompt: str) -> str:
+    try:
+        result = adapter.call_api(
+            api_key=API_KEY,
+            model=MODEL,
+            system=SYSTEM,
+            user=prompt,
+            base_url=BASE_URL or None,
+            max_tokens=MAX_TOKENS,
+        )
+    except urllib.error.HTTPError as e:
+        print(f"::error::API HTTP error {e.code}: {e.read().decode()}")
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"::error::Network error reaching AI API: {e.reason}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"::error::{e}")
+        sys.exit(1)
+    if not isinstance(result, str) or not result.strip():
+        print("::error::Adapter returned empty or non-string review")
+        sys.exit(1)
+    return result
+
+
+# ── Dispatch ──────────────────────────────────────────────────────────────────
+
+file_diffs = diff_utils.split_diff_by_file(diff)
+all_paths  = [diff_utils.file_path(fd) for fd in file_diffs]
+
+if chunk_large_diffs is True:
+    # Multi-pass: split by file, batch into chunks, aggregate findings + worst verdict
+    batches = diff_utils.batch_file_diffs(file_diffs, _CHAR_LIMIT)
+    if len(batches) <= 1:
+        # Fits in one pass — run normally
+        diff_block = diff.strip() or "(empty diff)"
+        review = _call(_build_prompt(diff_block))
+    else:
+        reviews = []
+        for i, batch in enumerate(batches):
+            batch_paths = [diff_utils.file_path(fd) for fd in batch]
+            file_list   = "\n".join(f"> - `{p}`" for p in batch_paths)
+            batch_context = (
+                f"> **Review pass {i + 1} of {len(batches)}** — "
+                f"reviewing {len(batch)} of {len(file_diffs)} file(s):\n"
+                f"{file_list}\n"
+                "> Review only the files above against all criteria.\n\n"
+            )
+            reviews.append(_call(_build_prompt(''.join(batch), batch_context)))
+        review = diff_utils.aggregate_reviews(reviews)
+else:
+    # Truncate mode (chunk_large_diffs missing or False):
+    # cap at DIFF_LINES_LIMIT lines, list any skipped files in the output.
+    diff_lines = diff.splitlines()
+    if len(diff_lines) > DIFF_LINES_LIMIT:
+        truncated       = '\n'.join(diff_lines[:DIFF_LINES_LIMIT])
+        reviewed_diffs  = diff_utils.split_diff_by_file(truncated)
+        reviewed_paths  = {diff_utils.file_path(fd) for fd in reviewed_diffs}
+        skipped         = [p for p in all_paths if p not in reviewed_paths]
+        diff_block      = truncated.strip()
+    else:
+        skipped    = []
+        diff_block = diff.strip() or "(empty diff)"
+
+    review = _call(_build_prompt(diff_block))
+
+    if skipped:
+        skipped_list = "\n".join(f"- `{p}`" for p in skipped)
+        review += (
+            f"\n\n---\n\n**Files not reviewed** — diff exceeded {DIFF_LINES_LIMIT} lines. "
+            "Set `chunk_large_diffs: true` in `.github/reviewsentry.yml` to review all files:\n\n"
+            + skipped_list
+        )
+
+# ── Split review for posting ──────────────────────────────────────────────────
+
+_FOOTER = (
+    "\n\n---\n"
+    "🔴 Critical — block merge · 🟠 High — fix before merge · "
+    "🟡 Moderate — worth fixing · 🔵 Low/Informational — noted, no action required\n\n"
+    "*AI-generated advisory review. All verdicts are recommendations only "
+    "— the final merge decision rests with the human maintainer.*"
+)
+
+parts = diff_utils.split_review_for_posting(review)
+n = len(parts)
+
+for i, part in enumerate(parts, 1):
+    label = f" ({i}/{n})" if n > 1 else ""
+    header = f"## AI Code Review{label}\n\n"
+    footer = _FOOTER if i == n else ""
+    path = os.path.join(runner_temp, f"review_part_{i}.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(header + part.strip() + footer)
 
 # ── Write output ──────────────────────────────────────────────────────────────
 
 delimiter = "AI_REVIEW_EOF"
 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
     out.write(f"review<<{delimiter}\n{review}\n{delimiter}\n")
+    out.write(f"review_parts={n}\n")
 
-print("Review complete.")
+print(f"Review complete ({n} part(s)).")

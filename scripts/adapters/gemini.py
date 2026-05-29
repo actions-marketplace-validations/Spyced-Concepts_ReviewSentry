@@ -19,6 +19,7 @@ def call_api(
     system: str,
     user: str,
     base_url: str | None = None,
+    max_tokens: int = 4096,
 ) -> str:
     """Call the Gemini generateContent API and return the review text."""
     root = base_url or _BASE_URL
@@ -32,7 +33,7 @@ def call_api(
             {"role": "user", "parts": [{"text": user}]}
         ],
         "generationConfig": {
-            "maxOutputTokens": 1024,
+            "maxOutputTokens": max_tokens,
         },
     }
 
