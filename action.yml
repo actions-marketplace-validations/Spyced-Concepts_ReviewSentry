@@ -205,13 +205,15 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
       run: |
-        gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" \
-          --body "## AI Code Review
-
-No reviewable diff — this appears to be a sync or promotion PR with no new changes. Skipping review.
-
----
-*AI-generated advisory review. All verdicts are recommendations only — the final merge decision rests with the human maintainer.*"
+        {
+          echo "## AI Code Review"
+          echo ""
+          echo "No reviewable diff — this appears to be a sync or promotion PR with no new changes. Skipping review."
+          echo ""
+          echo "---"
+          echo "*AI-generated advisory review. All verdicts are recommendations only — the final merge decision rests with the human maintainer.*"
+        } > "$RUNNER_TEMP/no_diff_comment.md"
+        gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/no_diff_comment.md"
 
     - name: Run AI review
       if: steps.diff.outputs.skip != 'true'
