@@ -113,7 +113,7 @@ def aggregate_reviews(reviews: list[str]) -> str:
 # pass headers from chunked reviews).
 _SECTION_RE = re.compile(r'^(✅|⚠️|###\s)', re.MULTILINE)
 
-COMMENT_CHAR_LIMIT = 50_000
+COMMENT_CHAR_LIMIT = 50_000  # GitHub's hard limit is 65,536; 50K gives a safe margin
 
 
 def split_review_for_posting(review: str, char_limit: int = COMMENT_CHAR_LIMIT) -> list[str]:

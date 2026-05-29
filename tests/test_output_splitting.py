@@ -99,10 +99,8 @@ def test_each_part_within_char_limit():
     review = _review(_SECTION_A, _SECTION_B, _SECTION_C)
     limit = max(len(_SECTION_A), len(_SECTION_B), len(_SECTION_C)) + 10
     parts = diff_utils.split_review_for_posting(review, char_limit=limit)
-    # All parts except one housing an oversized section should be ≤ limit
     for p in parts:
-        # Allow one oversize (oversized-section guarantee)
-        assert len(p) <= limit * 2
+        assert len(p) <= limit
 
 
 # ── action.yml and README documentation ──────────────────────────────────────

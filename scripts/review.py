@@ -43,8 +43,8 @@ PR_NUM         = os.environ.get("PR_NUMBER", "")
 EXTRA          = os.environ.get("REVIEW_CRITERIA", "")
 SYSTEM_CONTEXT    = os.environ.get("SYSTEM_CONTEXT", "").strip()
 DIFF_LINES_LIMIT  = max(1, int(os.environ.get("DIFF_LINES_LIMIT", "1500")))
-_MIN_TOKENS       = 256
-MAX_TOKENS        = max(_MIN_TOKENS, int(os.environ.get("MAX_TOKENS", "4096")))
+MIN_TOKENS        = 256
+MAX_TOKENS        = max(MIN_TOKENS, int(os.environ.get("MAX_TOKENS", "4096")))
 
 _SHOW_PASSING_KEY = "SHOW_PASSING_CRITERIA"
 _show_raw = os.environ.get(_SHOW_PASSING_KEY, "true").strip().lower()
@@ -104,8 +104,8 @@ _system_base = (
 )
 SYSTEM = _system_base + (f" {SYSTEM_CONTEXT}" if SYSTEM_CONTEXT else "")
 
-_PR_BODY_EXCERPT_LEN = 500
-body_excerpt = PR_BODY[:_PR_BODY_EXCERPT_LEN] if PR_BODY else "(no description)"
+PR_BODY_EXCERPT_LEN = 500
+body_excerpt = PR_BODY[:PR_BODY_EXCERPT_LEN] if PR_BODY else "(no description)"
 
 # Load criteria config from .github/reviewsentry.yml (if present)
 cfg_overrides, cfg_custom, cfg_warnings, cfg_behaviour = rs_config.load()
