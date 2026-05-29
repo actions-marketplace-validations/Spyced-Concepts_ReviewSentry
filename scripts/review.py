@@ -157,8 +157,8 @@ if cfg_warnings:
 #                    False or missing → truncate at DIFF_LINES_LIMIT, list skipped files
 chunk_large_diffs = cfg_behaviour.get("chunk_large_diffs")
 
-# Character threshold: DIFF_LINES_LIMIT × ~80 chars per diff line
-_CHAR_LIMIT = DIFF_LINES_LIMIT * 80
+_CHARS_PER_DIFF_LINE = 80  # average characters per line in a unified diff
+_CHAR_LIMIT = DIFF_LINES_LIMIT * _CHARS_PER_DIFF_LINE
 
 
 def _build_prompt(diff_block: str, batch_context: str = "") -> str:

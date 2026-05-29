@@ -45,7 +45,8 @@ def batch_file_diffs(file_diffs: list[str], char_limit: int) -> list[list[str]]:
 
     A single file that exceeds char_limit on its own is placed in its own
     batch rather than dropped — the caller decides how to handle oversized
-    individual files.
+    individual files. If char_limit is very small, each file still gets its
+    own batch (no infinite loop, no data loss).
     """
     batches: list[list[str]] = []
     current: list[str] = []
