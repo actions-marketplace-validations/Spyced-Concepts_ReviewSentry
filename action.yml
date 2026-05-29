@@ -176,7 +176,7 @@ runs:
           fi
         fi
         rm -f "$GH_ERR"
-        _DELIM="RSEOF_$(openssl rand -hex 8)"
+        _DELIM="RSEOF_$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
         {
           echo "REVIEWSENTRY_CONFIG<<${_DELIM}"
           printf '%s' "${CONFIG:-}"
