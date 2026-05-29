@@ -183,8 +183,11 @@ def _build_prompt(diff_block: str, batch_context: str = "") -> str:
         + "\n\n"
         "Format your response as follows:\n"
         "- Begin each criterion section header with ✅ (no issues found) or ⚠️ (issues present).\n"
-        "- Prefix each individual finding with \U0001f534 (Critical), \U0001f7e0 (High), "
-        "or \U0001f7e1 (Moderate/Low) based on severity.\n"
+        "- Prefix each individual finding with \U0001f534 (Critical — block merge), "
+        "\U0001f7e0 (High — fix before merge), "
+        "\U0001f7e1 (Moderate — minor problem worth fixing), "
+        "or \U0001f535 (Low/Informational — noted for completeness, no action required) "
+        "based on severity.\n"
         + ("- Omit criterion sections where no issues were found — show only ⚠️ sections.\n"
            if not SHOW_PASSING else "")
         + "\nAfter completing your full review of all criteria, end your response with exactly one of the following verdict lines. "
@@ -285,6 +288,8 @@ else:
 
 _FOOTER = (
     "\n\n---\n"
+    "🔴 Critical — block merge · 🟠 High — fix before merge · "
+    "🟡 Moderate — worth fixing · 🔵 Low/Informational — noted, no action required\n\n"
     "*AI-generated advisory review. All verdicts are recommendations only "
     "— the final merge decision rests with the human maintainer.*"
 )

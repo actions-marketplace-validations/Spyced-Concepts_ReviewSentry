@@ -25,6 +25,8 @@ Releases are not scheduled — they ship when there is something to ship.
 - **`max_tokens` input** — configurable AI response token limit, default 4096 (was hardcoded 1024 in all adapters). Reviews no longer cut off mid-criterion on non-trivial PRs. Values below 256 are clamped. (#96)
 - **Output splitting** — reviews exceeding 50,000 characters are automatically split at criterion-section boundaries and posted as sequential PR comments labelled `(1/N)`, `(2/N)`, etc. The verdict always appears in the last comment. (#96)
 - 14 new tests in `tests/test_output_splitting.py`.
+- **Four-level severity indicators** — 🔴 Critical (block merge) · 🟠 High (fix before merge) · 🟡 Moderate (worth fixing) · 🔵 Low/Informational (noted, no action required). Previously 🟡 covered both Moderate and Low, making informational notes visually indistinguishable from genuine warnings. (#97)
+- Severity legend added to the comment footer so the colour scheme is self-explanatory without reading the docs.
 
 ### Changed
 
