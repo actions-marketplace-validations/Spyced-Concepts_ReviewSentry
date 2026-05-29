@@ -123,6 +123,7 @@ runs:
   using: composite
   steps:
     - name: Check draft PR policy
+      id: draft-check
       shell: bash
       env:
         IS_DRAFT:      ${{ github.event.pull_request.draft }}
@@ -142,11 +143,12 @@ runs:
           _is_draft="${IS_DRAFT:-false}"
           if [ "$_is_draft" = "true" ]; then
             echo "Skipping review — pull request is a draft"
-            exit 0
+            echo "draft_skip=true" >> "$GITHUB_OUTPUT"
           fi
         fi
 
     - name: Fetch reviewsentry.yml config
+      if: steps.draft-check.outputs.draft_skip != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -184,6 +186,7 @@ runs:
         } >> "$GITHUB_ENV"
 
     - name: Capture PR diff
+      if: steps.draft-check.outputs.draft_skip != 'true'
       id: diff
       shell: bash
       env:
@@ -207,7 +210,7 @@ runs:
         rm -f "$GH_DIFF_ERR"
 
     - name: Post no-changes comment
-      if: steps.diff.outputs.skip == 'true'
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -223,7 +226,7 @@ runs:
         gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/no_diff_comment.md"
 
     - name: Run AI review
-      if: steps.diff.outputs.skip != 'true'
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip != 'true'
       id: review
       shell: bash
       env:
@@ -244,7 +247,7 @@ runs:
       run: python3 "${{ github.action_path }}/scripts/review.py"
 
     - name: Post review comment
-      if: steps.diff.outputs.skip != 'true'
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip != 'true'
       shell: bash
       env:
         GH_TOKEN:      ${{ inputs.github_token }}
@@ -257,7 +260,7 @@ runs:
         done
 
     - name: Check verdict
-      if: steps.diff.outputs.skip != 'true'
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip != 'true'
       id: verdict
       shell: bash
       env:
