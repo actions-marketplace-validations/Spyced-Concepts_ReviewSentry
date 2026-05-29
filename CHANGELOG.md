@@ -15,7 +15,7 @@ Releases are not scheduled — they ship when there is something to ship.
 
 ---
 
-## [Unreleased]
+## [0.3.4-beta] — 2026-05-29
 
 ### Added
 
