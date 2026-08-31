@@ -152,12 +152,13 @@ The `@v0` floating tag was removed on 2026-05-14. See the [CHANGELOG](CHANGELOG.
 | `pr_number` | ✓ | — | Pull request number |
 | `pr_title` | ✓ | — | Pull request title |
 | `pr_body` | | `""` | Pull request description |
-| `diff_lines` | | `1500` | Max diff lines to send for review. If the diff exceeds this limit it is truncated and the review comment includes a visible warning: `> Diff was large — review based on first N lines only.` The action never fails due to diff size — it always posts a review, with the truncation note prepended when applicable. Reduce this value if you hit AI provider token limits; increase it for large refactors. |
+| `diff_lines` | | `1500` | Lines-per-chunk threshold for diff processing. Behaviour depends on `chunk_large_diffs` in `.github/reviewsentry.yml`: if chunking is enabled, this is the max lines per review pass; if chunking is disabled (default), diffs exceeding this limit are truncated and the review lists any files that were not reviewed. Raise this value for large refactors; lower it if you hit provider token limits. |
 | `review_criteria` | | `""` | Additional review criteria, one per line |
 | `custom_rules` | | `""` | Custom sensitive data scan patterns, one per line |
 | `show_passing_criteria` | | `true` | Default: `true`. Whether to include passing criteria (no issues found) in the review output. Set to `false` to show only criteria with findings, keeping reviews concise on large PRs. Accepted values: `true`/`1`/`yes` or `false`/`0`/`no`. Any other value triggers a workflow warning and defaults to `true`. |
 | `fail_on` | | `never` | Default: `never`. When to fail the workflow based on the AI verdict. Set to `request_changes` to exit non-zero when the verdict is REQUEST CHANGES, blocking PR merges via required status checks. Accepted values: `never`, `request_changes`. Any other value triggers a workflow warning and defaults to `never`. |
 | `review_drafts` | | `true` | Default: `true`. Whether to review draft pull requests — drafts are reviewed by default. Set to `false` to skip review until the PR is marked ready for review. Accepted values: `true`/`1`/`yes` or `false`/`0`/`no`. Any other value triggers a workflow warning and defaults to `true`. |
+| `max_tokens` | | `4096` | Maximum tokens for the AI response. Raise if reviews are being cut off mid-criterion; lower to reduce cost on very small PRs. Values below 256 are clamped to 256. Reviews exceeding 50,000 characters are automatically split across multiple sequential PR comments, with the verdict always in the last comment. |
 | `github_token` | ✓ | — | GitHub token for posting the review comment |
 
 ## Outputs
@@ -166,6 +167,38 @@ The `@v0` floating tag was removed on 2026-05-14. See the [CHANGELOG](CHANGELOG.
 |---|---|
 | `review` | The full review text posted as a PR comment |
 | `verdict` | The AI verdict — one of `APPROVE`, `APPROVE WITH NOTES`, or `REQUEST CHANGES`. Empty string if the verdict could not be extracted (workflow warning emitted). |
+
+---
+
+## Recommended workflow
+
+ReviewSentry works best when it acts as a first-pass reviewer that your team builds on, not a gate that replaces human judgement.
+
+**1. Open your PR as a draft**
+
+Raise the pull request as a draft. ReviewSentry reviews it immediately — any issues flagged before a human even looks at it.
+
+**2. Address the review findings**
+
+For each finding in the AI review comment:
+- **Fix it** — commit the fix to the same branch; ReviewSentry re-reviews automatically.
+- **Explain it** — if the finding is a false positive or an intentional choice, leave a short comment on the PR explaining why. This creates a record for the human reviewer.
+
+**3. Mark the PR ready for review**
+
+Once you are satisfied with the AI review findings, mark the PR ready for review. Push a final trivial commit if you want to trigger one last ReviewSentry run at this point (see [KI-004](KNOWN_ISSUES.md#ki-004) — the ready-for-review event does not currently re-trigger the check automatically).
+
+**4. Confirm all checks are green**
+
+Check that all required status checks pass and that the AI review verdict is `APPROVE` or `APPROVE WITH NOTES`. A verdict of `REQUEST CHANGES` with unresolved findings warrants a second look before requesting a human reviewer.
+
+**5. Request a peer review**
+
+Assign a human reviewer. Share the AI review comment as context — it gives the reviewer a structured starting point and surfaces any issues you've already addressed or explained.
+
+**6. Merge**
+
+The human reviewer merges when they are satisfied with both the code and the AI review. The AI verdict is advisory — the final merge decision always rests with the human maintainer.
 
 ---
 
@@ -220,15 +253,58 @@ Add custom criteria via `review_criteria`. Add domain-specific sensitive data pa
 
 ---
 
+## Per-repo configuration (`.github/reviewsentry.yml`)
+
+Drop a `.github/reviewsentry.yml` file in your repository to customise ReviewSentry's behaviour without touching the workflow file.
+
+### Diff handling for large PRs
+
+By default, ReviewSentry truncates the diff at `diff_lines` lines and lists any files that were not reviewed. To review the entire diff across multiple passes instead, set:
+
+```yaml
+# .github/reviewsentry.yml
+chunk_large_diffs: true
+```
+
+| `chunk_large_diffs` value | Behaviour |
+|---|---|
+| Missing or `false` | Truncate at `diff_lines`; list skipped files in the review comment |
+| `true` | Capture the full diff; split by file boundary if over threshold; run one review pass per batch; aggregate findings with a combined worst-case verdict |
+
+### Disabling criteria
+
+```yaml
+# Disable optional criteria
+cross_platform: false
+bash_quality: false
+
+# Disable a core criterion — requires explicit acknowledgement
+sensitive_data: false
+acknowledge_disabled_core: true
+```
+
+### Custom criteria
+
+```yaml
+custom:
+  - "Verify all async functions include error handling"
+  - "Flag any use of console.log in production code"
+```
+
+---
+
 ## Architecture
 
 ```
 scripts/
   review.py            # Provider-agnostic core — zero vendor references
+  diff_utils.py        # Diff splitting, batching, and review aggregation
+  config.py            # .github/reviewsentry.yml loader and validator
   adapters/
     anthropic.py       # Anthropic Claude
     openai.py          # OpenAI + any OpenAI-compatible endpoint
     gemini.py          # Google Gemini
+    github_models.py   # GitHub Models (zero-cost with GITHUB_TOKEN)
 docs/
   setup-anthropic.md
   setup-openai.md

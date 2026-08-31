@@ -15,6 +15,54 @@ Releases are not scheduled — they ship when there is something to ship.
 
 ---
 
+## [0.3.5-beta] — 2026-05-29
+
+### Security
+
+- **Gemini API key removed from URL** — key was previously passed as a `?key=` query parameter, logging it in server-side access logs and CDN traces. Moved to the `X-goog-api-key` request header. (#129)
+- **`GITHUB_OUTPUT` multiline delimiter randomised** — the static `AI_REVIEW_EOF` delimiter is replaced with `f"AI_REVIEW_EOF_{secrets.token_hex(8)}"` to prevent output truncation if the AI-generated review happens to contain the delimiter string on its own line. Matches the fix already applied to the `REVIEWSENTRY_CONFIG` heredoc in #131. (#158)
+- **`set -euo pipefail` added** to the `Post no-changes comment` step — the only `run:` block in `action.yml` that previously lacked it. (#136)
+- **`actions/checkout` pinned to full commit SHA** in the test workflow (`11bd71901bbe5b1630ceea73d27597364c9af683` — v4.2.2), consistent with the SHA-pinning guidance in `SECURITY.md`. (#161)
+
+### Fixed
+
+- **Draft PR skip logic** — `exit 0` inside a composite action `run:` step does not skip downstream steps; replaced with `echo "draft_skip=true" >> "$GITHUB_OUTPUT"` and `if: steps.draft-check.outputs.draft_skip != 'true'` guards on all downstream steps. (#130)
+- **`custom_rules` feature fully implemented** — the `custom_rules` input was wired in `action.yml` and documented, but `review.py` never read `CUSTOM_RULES` from the environment. Custom sensitive data patterns are now read, parsed, and appended to the Sensitive data criterion as High-severity project-specific terms. (#145)
+- **Heredoc delimiter for `REVIEWSENTRY_CONFIG`** — `openssl rand -hex 8` replaced with `python3 -c 'import secrets; print(secrets.token_hex(8))'`; `openssl` is not guaranteed available on all runner images. (#131)
+- **Adapter interface check** in `test.yml` now includes `max_tokens` in `required_sig` — a new adapter omitting the parameter would previously pass the check and fail silently at runtime. (#162)
+
+### Added
+
+- **`pr_body_chars` input** — configures the maximum PR description characters included in the review context (default 2000; previously hardcoded 500). When truncated, the prompt includes the character count omitted so the AI does not flag the description as incomplete.
+
+### Changed
+
+- Severity indicator wording tightened: 🟡 Moderate = *"a specific code change is recommended"*; 🔵 Low/Informational = *"observation only, no fix needed — choose 🔵 when your analysis concludes the code is already correct"*.
+
+---
+
+## [0.3.4-beta] — 2026-05-29
+
+### Added
+
+- **Diff chunking** (`chunk_large_diffs` in `.github/reviewsentry.yml`) — set `chunk_large_diffs: true` to review the full diff across multiple passes rather than truncating. When `false` or absent (default), large diffs are still truncated at `diff_lines` lines but the review now lists any files that were not reviewed so nothing is silently skipped. Multi-pass reviews aggregate all findings with a combined worst-case verdict. (#95)
+- `scripts/diff_utils.py` — pure utility module for diff splitting, file batching, verdict extraction, review aggregation, and review-output splitting. Importable directly by tests.
+- Empty-diff handling: sync/promotion PRs (e.g. `main → functional-test`) that produce no diff now exit with a pass and post an informational comment instead of failing CI. (#95)
+- **`max_tokens` input** — configurable AI response token limit, default 4096 (was hardcoded 1024 in all adapters). Reviews no longer cut off mid-criterion on non-trivial PRs. Values below 256 are clamped. (#96)
+- **Output splitting** — reviews exceeding 50,000 characters are automatically split at criterion-section boundaries and posted as sequential PR comments labelled `(1/N)`, `(2/N)`, etc. The verdict always appears in the last comment. (#96)
+- 14 new tests in `tests/test_output_splitting.py`.
+- **Four-level severity indicators** — 🔴 Critical (block merge) · 🟠 High (fix before merge) · 🟡 Moderate (worth fixing) · 🔵 Low/Informational (noted, no action required). Previously 🟡 covered both Moderate and Low, making informational notes visually indistinguishable from genuine warnings. (#97)
+- Severity legend added to the comment footer so the colour scheme is self-explanatory without reading the docs.
+
+### Changed
+
+- `diff_lines` input repurposed from a hard truncation cap to a lines-per-chunk threshold. Existing values continue to work; the behaviour change is that the diff is no longer silently cut — skipped files are now listed.
+- Diff capture step no longer uses `head -n` — the full diff is always captured; Python handles truncation or chunking.
+- All four adapters (`anthropic`, `openai`, `gemini`, `github_models`) now accept a `max_tokens` keyword argument (default 4096) passed from `review.py`. Default raised from 1024 → 4096.
+- Post review comment step updated: review.py writes per-part files to `$RUNNER_TEMP`; action.yml iterates and posts each file. Header, per-part label, and footer are written by Python.
+
+---
+
 ## [0.3.3-beta] — 2026-05-15
 
 ### Added

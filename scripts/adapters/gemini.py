@@ -19,10 +19,11 @@ def call_api(
     system: str,
     user: str,
     base_url: str | None = None,
+    max_tokens: int = 4096,
 ) -> str:
     """Call the Gemini generateContent API and return the review text."""
     root = base_url or _BASE_URL
-    url  = f"{root}/v1beta/models/{model}:generateContent?key={api_key}"
+    url  = f"{root}/v1beta/models/{model}:generateContent"
 
     payload = {
         "system_instruction": {
@@ -32,14 +33,17 @@ def call_api(
             {"role": "user", "parts": [{"text": user}]}
         ],
         "generationConfig": {
-            "maxOutputTokens": 1024,
+            "maxOutputTokens": max_tokens,
         },
     }
 
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"content-type": "application/json"},
+        headers={
+            "content-type": "application/json",
+            "X-goog-api-key": api_key,
+        },
         method="POST",
     )
 

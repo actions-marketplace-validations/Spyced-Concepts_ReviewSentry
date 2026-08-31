@@ -43,7 +43,12 @@ inputs:
     required: false
     default: ""
   diff_lines:
-    description: Maximum number of diff lines to review. Default 1500.
+    description: >
+      Lines-per-chunk threshold for diff processing. When chunk_large_diffs
+      is true in .github/reviewsentry.yml, this is the maximum lines per
+      review pass. When chunk_large_diffs is false or absent (default),
+      diffs exceeding this limit are truncated and the review lists any
+      files that were not reviewed. Default 1500.
     required: false
     default: "1500"
   review_criteria:
@@ -95,6 +100,22 @@ inputs:
       workflow warning and defaults to true.
     required: false
     default: "true"
+  max_tokens:
+    description: >
+      Maximum tokens for the AI response. Default 4096. Raise if reviews are
+      being cut off mid-criterion; lower to reduce cost on very small PRs.
+      Values below 256 are clamped to 256.
+    required: false
+    default: "4096"
+  pr_body_chars:
+    description: >
+      Maximum characters of the pull request description to include in the
+      review context. Default 2000. Raise for very detailed PR descriptions;
+      lower to reduce token usage on simple PRs. Descriptions longer than
+      this limit are truncated and the AI is notified so it does not flag
+      the description as incomplete. Values below 50 are clamped to 50.
+    required: false
+    default: "2000"
 
 outputs:
   review:
@@ -111,6 +132,7 @@ runs:
   using: composite
   steps:
     - name: Check draft PR policy
+      id: draft-check
       shell: bash
       env:
         IS_DRAFT:      ${{ github.event.pull_request.draft }}
@@ -130,11 +152,12 @@ runs:
           _is_draft="${IS_DRAFT:-false}"
           if [ "$_is_draft" = "true" ]; then
             echo "Skipping review — pull request is a draft"
-            exit 0
+            echo "draft_skip=true" >> "$GITHUB_OUTPUT"
           fi
         fi
 
     - name: Fetch reviewsentry.yml config
+      if: steps.draft-check.outputs.draft_skip != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -164,30 +187,57 @@ runs:
           fi
         fi
         rm -f "$GH_ERR"
+        _DELIM="RSEOF_$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
         {
-          echo "REVIEWSENTRY_CONFIG<<RSEOF"
+          echo "REVIEWSENTRY_CONFIG<<${_DELIM}"
           printf '%s' "${CONFIG:-}"
           echo ""
-          echo "RSEOF"
+          echo "${_DELIM}"
         } >> "$GITHUB_ENV"
 
     - name: Capture PR diff
+      if: steps.draft-check.outputs.draft_skip != 'true'
       id: diff
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
       run: |
         set -euo pipefail
+        GH_DIFF_ERR=$(mktemp)
         gh pr diff "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" \
-          | head -n "${{ inputs.diff_lines }}" > "$RUNNER_TEMP/pr_diff.txt" || true
+          > "$RUNNER_TEMP/pr_diff.txt" 2>"$GH_DIFF_ERR" || true
         LINES=$(wc -l < "$RUNNER_TEMP/pr_diff.txt")
         if [ "${LINES:-0}" -eq 0 ]; then
-          echo "::error::Diff is empty — gh pr diff may have failed or PR has no changes"
-          exit 1
+          if [ -s "$GH_DIFF_ERR" ]; then
+            echo "::warning::gh pr diff produced no output: $(cat "$GH_DIFF_ERR")"
+          fi
+          echo "No reviewable diff — sync or promotion PR with no new changes."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "lines=$LINES" >> "$GITHUB_OUTPUT"
         fi
-        echo "lines=$LINES" >> "$GITHUB_OUTPUT"
+        rm -f "$GH_DIFF_ERR"
+
+    - name: Post no-changes comment
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        set -euo pipefail
+        {
+          echo "## AI Code Review"
+          echo ""
+          echo "No reviewable diff — this appears to be a sync or promotion PR with no new changes. Skipping review."
+          echo ""
+          echo "---"
+          echo "*AI-generated advisory review. All verdicts are recommendations only — the final merge decision rests with the human maintainer.*"
+        } > "$RUNNER_TEMP/no_diff_comment.md"
+        gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/no_diff_comment.md"
 
     - name: Run AI review
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip != 'true'
       id: review
       shell: bash
       env:
@@ -204,33 +254,25 @@ runs:
         SYSTEM_CONTEXT:        ${{ inputs.system_context }}
         REVIEWSENTRY_CONFIG:   ${{ env.REVIEWSENTRY_CONFIG }}
         SHOW_PASSING_CRITERIA: ${{ inputs.show_passing_criteria }}
+        MAX_TOKENS:            ${{ inputs.max_tokens }}
+        PR_BODY_CHARS:         ${{ inputs.pr_body_chars }}
       run: python3 "${{ github.action_path }}/scripts/review.py"
 
     - name: Post review comment
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip != 'true'
       shell: bash
       env:
-        GH_TOKEN:   ${{ inputs.github_token }}
-        REVIEW:     ${{ steps.review.outputs.review }}
-        DIFF_LINES: ${{ steps.diff.outputs.lines }}
-        DIFF_LIMIT: ${{ inputs.diff_lines }}
+        GH_TOKEN:      ${{ inputs.github_token }}
+        REVIEW_PARTS:  ${{ steps.review.outputs.review_parts }}
       run: |
-        NOTE=""
-        if [ "${DIFF_LINES:-0}" -ge "${DIFF_LIMIT:-1500}" ]; then
-          NOTE="> Diff was large — review based on first ${DIFF_LIMIT} lines only."
-        fi
-        {
-          echo "## AI Code Review"
-          echo ""
-          [ -n "$NOTE" ] && printf '%s\n\n' "$NOTE"
-          printf '%s' "$REVIEW"
-          echo ""
-          echo ""
-          echo "---"
-          echo "*AI-generated advisory review. All verdicts are recommendations only — the final merge decision rests with the human maintainer.*"
-        } > "$RUNNER_TEMP/review_body.md"
-        gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/review_body.md"
+        set -euo pipefail
+        for i in $(seq 1 "${REVIEW_PARTS:-1}"); do
+          gh pr comment "${{ inputs.pr_number }}" --repo "$GITHUB_REPOSITORY" \
+            --body-file "$RUNNER_TEMP/review_part_${i}.md"
+        done
 
     - name: Check verdict
+      if: steps.draft-check.outputs.draft_skip != 'true' && steps.diff.outputs.skip != 'true'
       id: verdict
       shell: bash
       env:
